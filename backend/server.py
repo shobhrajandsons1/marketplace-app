@@ -1816,9 +1816,10 @@ async def add_to_wishlist(product_id: str, current_user: User = Depends(get_curr
 
 @api_router.delete("/wishlist/remove/{product_id}")
 async def remove_from_wishlist(product_id: str, current_user: User = Depends(get_current_user)):
-    await db.wishlists.update_one(
+    result = await db.wishlists.update_one(
         {"user_id": current_user.id},
         {"$pull": {"product_ids": product_id}, "$set": {"updated_at": datetime.utcnow()}}
     )
-    return {"message": "Product removed from wish"}
-    
+    if result.modified_count == 0:
+        return {"message": "Product was not in wishlist or wishlist does not exist"}
+    return {"message": "Product removed from wishlist"}
