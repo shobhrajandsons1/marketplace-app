@@ -1,603 +1,4 @@
-@api_router.get("/products")
-async def get_products(
-    # Basic Filters
-    category: Optional[str] = None,
-    subcategory: Optional[str] = None,
-    seller_id: Optional[str] = None,
-    brand: Optional[str] = None,
-    
-    # Price Filters
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    
-    # Rating and Review Filters
-    min_rating: Optional[float] = None,
-    min_reviews: Optional[int] = None,
-    
-    # Availability Filters
-    in_stock: Optional[bool] = None,
-    has_variants: Optional[bool] = None,
-    
-    # Feature Filters
-    is_featured: Optional[bool] = None,
-    is_trending: Optional[bool] = None,
-    custom_sizing: Optional[bool] = None,
-    
-    # Search Query
-    search: Optional[str] = None,
-    
-    # Advanced Filters
-    location: Optional[str] = None,
-    gst_available: Optional[bool] = None,
-    moq_max: Optional[int] = None,
-    
-    # Sorting Options
-    sort_by: Optional[str] = "created_at",  # created_at, price_low, price_high, rating, popularity, relevance
-    
-    # Pagination
-    limit: int = 20,
-    skip: int = 0
-):
-    query = {"is_active": True}
-    
-    # Basic filters
-    if category:
-        query["category"] = category
-    if subcategory:
-        query["subcategory"] = subcategory
-    if seller_id:
-        query["seller_id"] = seller_id
-    if brand:
-        query["brand"] = {"$regex": brand, "$options": "i"}
-    
-    # Price filters
-    if min_price is not None:
-        query["base_price"] = {"$gte": min_price}
-    if max_price is not None:
-        if "base_price" in query:
-            query["base_price"]["$lte"] = max_price
-        else:
-            query["base_price"] = {"$lte": max_price}
-    
-    # Rating and review filters
-    if min_rating is not None:
-        query["average_rating"] = {"$gte": min_rating}
-    if min_reviews is not None:
-        query["total_reviews"] = {"$gte": min_reviews}
-    
-    # Availability filters
-    if in_stock is not None:
-        if in_stock:
-            query["inventory_count"] = {"$gt": 0}
-        else:
-            query["inventory_count"] = {"$eq": 0}
-    
-    if has_variants is not None:
-        query["has_variants"] = has_variants
-    
-    # Feature filters
-    if is_featured is not None:
-        query["is_featured"] = is_featured
-    if is_trending is not None:
-        query["is_trending"] = is_trending
-    if custom_sizing is not None:
-        query["custom_sizing.enabled"] = custom_sizing
-    
-    # Advanced filters
-    if gst_available is not None:
-        if gst_available:
-            query["gst_percentage"] = {"$gt": 0}
-        else:
-            query["gst_percentage"] = {"$eq": 0}
-    
-    if moq_max is not None:
-        query["moq"] = {"$lte": moq_max}
-    
-    # Search functionality
-    if search:
-        search_regex = {"$regex": search, "$options": "i"}
-        query["$or"] = [
-            {"title": search_regex},
-            {"description": search_regex},
-            {"brand": search_regex},
-            {"category": search_regex},
-            {"seo_tags": {"$in": [search_regex]}},
-            {"meta_keywords": {"$in": [search_regex]}}
-        ]
-    
-    # Sorting
-    sort_options = {
-        "created_at": [("created_at", -1)],
-        "price_low": [("base_price", 1)],
-        "price_high": [("base_price", -1)],
-        "rating": [("average_rating", -1)],
-        "popularity": [("total_sold", -1)],
-        "relevance": [("view_count", -1), ("total_sold", -1)],
-        "trending": [("is_trending", -1), ("social_shares", -1)]
-    }
-    sort_criteria = sort_options.get(sort_by, [("created_at", -1)])
-    
-    products = await db.products.find(query).sort(sort_criteria).skip(skip).limit(limit).to_list(limit)
-    total_count = await db.products.count_documents(query)
-    
-    return {
-        "products": [Product(**product) for product in products],
-        "total_count": total_count,
-        "current_page": skip // limit + 1,
-        "total_pages": (total_count + limit - 1) // limit,
-        "has_next": skip + limit < total_count,
-        "has_previous": skip > 0
-    }
-
-@api_router.get("/products/search/suggestions")
-async def get_search_suggestions(q: str):
-    """Get search suggestions for autocomplete"""
-    if len(q) < 2:
-        return {"suggestions": []}
-    
-    search_regex = {"$regex": q, "$options": "i"}
-    
-    # Get suggestions from products
-    pipeline = [
-        {"$match": {"is_active": True, "title": search_regex}},
-        {"$group": {"_id": "$title", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 5}
-    ]
-    
-    title_suggestions = await db.products.aggregate(pipeline).to_list(5)
-    
-    # Get brand suggestions
-    brand_pipeline = [
-        {"$match": {"is_active": True, "brand": search_regex}},
-        {"$group": {"_id": "$brand", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 3}
-    ]
-    
-    brand_suggestions = await db.products.aggregate(brand_pipeline).to_list(3)
-    
-    # Get category suggestions
-    category_pipeline = [
-        {"$match": {"is_active": True, "category": search_regex}},
-        {"$group": {"_id": "$category", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 3}
-    ]
-    
-    category_suggestions = await db.products.aggregate(category_pipeline).to_list(3)
-    
-    suggestions = []
-    
-    # Add title suggestions
-    for item in title_suggestions:
-        suggestions.append({
-            "text": item["_id"],
-            "type": "product",
-            "count": item["count"]
-        })
-    
-    # Add brand suggestions
-    for item in brand_suggestions:
-        suggestions.append({
-            "text": item["_id"],
-            "type": "brand",
-            "count": item["count"]
-        })
-    
-    # Add category suggestions
-    for item in category_suggestions:
-        suggestions.append({
-            "text": item["_id"],
-            "type": "category",
-            "count": item["count"]
-        })
-    
-    return {"suggestions": suggestions[:10]}
-
-@api_router.get("/products/{product_id}")
-async def get_product(product_id: str):
-    product = await db.products.find_one({"id": product_id})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return Product(**product)
-
-@api_router.get("/products/categories/list")
-async def get_categories():
-    """Get all unique categories"""
-    categories = await db.products.distinct("category", {"is_active": True})
-    return {"categories": categories}
-
-@api_router.get("/products/brands/list")
-async def get_brands():
-    """Get all unique brands"""
-    brands = await db.products.distinct("brand", {"is_active": True, "brand": {"$ne": None}})
-    return {"brands": brands}
-
-# Review Routes
-@api_router.post("/reviews")
-async def create_review(review_data: ReviewCreate, current_user: User = Depends(get_current_user)):
-    # Check if user has purchased this product
-    order = await db.orders.find_one({
-        "customer_id": current_user.id,
-        "items.product_id": review_data.product_id,
-        "status": {"$in": ["delivered", "completed"]}
-    })
-    
-    review_dict = review_data.dict()
-    review_dict["user_id"] = current_user.id
-    review_dict["is_verified_purchase"] = bool(order)
-    if order:
-        review_dict["order_id"] = order["id"]
-    
-    review = Review(**review_dict)
-    await db.reviews.insert_one(review.dict())
-    
-    # Update product rating
-    await update_product_rating(review_data.product_id)
-    
-    return {"message": "Review created successfully", "review_id": review.id}
-
-@api_router.get("/reviews/product/{product_id}")
-async def get_product_reviews(
-    product_id: str,
-    rating_filter: Optional[int] = None,
-    verified_only: bool = False,
-    limit: int = 10,
-    skip: int = 0
-):
-    query = {"product_id": product_id}
-    
-    if rating_filter:
-        query["rating"] = rating_filter
-    if verified_only:
-        query["is_verified_purchase"] = True
-    
-    reviews = await db.reviews.find(query).sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
-    
-    # Get user info for each review
-    for review in reviews:
-        user = await db.users.find_one({"id": review["user_id"]})
-        if user:
-            review["user_name"] = user.get("contact_person") or user["email"].split("@")[0]
-        else:
-            review["user_name"] = "Anonymous"
-    
-    return reviews
-
-async def update_product_rating(product_id: str):
-    """Update product's average rating and review count"""
-    pipeline = [
-        {"$match": {"product_id": product_id}},
-        {"$group": {
-            "_id": None,
-            "average_rating": {"$avg": "$rating"},
-            "total_reviews": {"$sum": 1}
-        }}
-    ]
-    
-    result = await db.reviews.aggregate(pipeline).to_list(1)
-    if result:
-        await db.products.update_one(
-            {"id": product_id},
-            {"$set": {
-                "average_rating": round(result[0]["average_rating"], 2),
-                "total_reviews": result[0]["total_reviews"]
-            }}
-        )
-
-# Enhanced Review Routes
-@api_router.post("/reviews/{review_id}/helpful")
-async def mark_review_helpful(review_id: str, helpful: bool, current_user: User = Depends(get_current_user)):
-    """Mark a review as helpful or unhelpful"""
-    field = "helpful_count" if helpful else "unhelpful_count"
-    await db.reviews.update_one(
-        {"id": review_id},
-        {"$inc": {field: 1}}
-    )
-    return {"message": f"Review marked as {'helpful' if helpful else 'unhelpful'}"}
-
-@api_router.post("/reviews/{review_id}/seller-response")
-async def add_seller_response(review_id: str, response: str, current_user: User = Depends(get_current_user)):
-    """Add seller response to a review"""
-    # Verify user is seller of the product
-    review = await db.reviews.find_one({"id": review_id})
-    if not review:
-        raise HTTPException(status_code=404, detail="Review not found")
-    
-    product = await db.products.find_one({"id": review["product_id"]})
-    if not product or product["seller_id"] != current_user.id:
-        raise HTTPException(status_code=403, detail="Only the seller can respond to reviews")
-    
-    await db.reviews.update_one(
-        {"id": review_id},
-        {
-            "$set": {
-                "seller_response": response,
-                "seller_response_date": datetime.utcnow()
-            }
-        }
-    )
-    return {"message": "Seller response added successfully"}
-
-@api_router.get("/reviews/analytics/{product_id}")
-async def get_review_analytics(product_id: str, current_user: User = Depends(get_current_user)):
-    """Get detailed review analytics for a product"""
-    # Verify user is seller of the product
-    product = await db.products.find_one({"id": product_id})
-    if not product or product["seller_id"] != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    pipeline = [
-        {"$match": {"product_id": product_id}},
-        {"$facet": {
-            "rating_distribution": [
-                {"$group": {"_id": "$rating", "count": {"$sum": 1}}},
-                {"$sort": {"_id": 1}}
-            ],
-            "sentiment_analysis": [
-                {"$group": {
-                    "_id": "$sentiment_label",
-                    "count": {"$sum": 1},
-                    "avg_sentiment": {"$avg": "$sentiment_score"}
-                }}
-            ],
-            "monthly_reviews": [
-                {"$group": {
-                    "_id": {
-                        "year": {"$year": "$created_at"},
-                        "month": {"$month": "$created_at"}
-                    },
-                    "count": {"$sum": 1},
-                    "avg_rating": {"$avg": "$rating"}
-                }},
-                {"$sort": {"_id.year": -1, "_id.month": -1}},
-                {"$limit": 12}
-            ]
-        }}
-    ]
-    
-    result = await db.reviews.aggregate(pipeline).to_list(1)
-    return result[0] if result else {}
-
-# Product Q&A Routes
-@api_router.get("/products/{product_id}/questions")
-async def get_product_questions(
-    product_id: str,
-    answered_only: bool = False,
-    limit: int = 10,
-    skip: int = 0
-):
-    """Get questions for a product"""
-    query = {"product_id": product_id}
-    
-    if answered_only:
-        query["answer"] = {"$ne": None}
-    
-    questions = await db.product_questions.find(query).sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
-    
-    # Get user info for each question
-    for question in questions:
-        user = await db.users.find_one({"id": question["user_id"]})
-        if user:
-            question["user_name"] = user.get("contact_person") or user["email"].split("@")[0]
-        else:
-            question["user_name"] = "Anonymous"
-        
-        # Get answerer info if available
-        if question.get("answered_by"):
-            answerer = await db.users.find_one({"id": question["answered_by"]})
-            if answerer:
-                question["answerer_name"] = answerer.get("contact_person") or answerer["email"].split("@")[0]
-    
-    return questions
-
-@api_router.post("/questions/{question_id}/answer")
-async def answer_question(question_id: str, answer_data: AnswerCreate, current_user: User = Depends(get_current_user)):
-    """Answer a product question"""
-    question = await db.product_questions.find_one({"id": question_id})
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
-    
-    # Check if user is seller of the product
-    product = await db.products.find_one({"id": question["product_id"]})
-    is_seller = product and product["seller_id"] == current_user.id
-    
-    await db.product_questions.update_one(
-        {"id": question_id},
-        {
-            "$set": {
-                "answer": answer_data.answer,
-                "answered_by": current_user.id,
-                "answered_at": datetime.utcnow(),
-                "is_seller_answer": is_seller
-            }
-        }
-    )
-    
-    return {"message": "Answer submitted successfully"}
-
-@api_router.post("/questions/{question_id}/helpful")
-async def mark_question_helpful(question_id: str, current_user: User = Depends(get_current_user)):
-    """Mark a question as helpful"""
-    await db.product_questions.update_one(
-        {"id": question_id},
-        {"$inc": {"helpful_count": 1}}
-    )
-    return {"message": "Question marked as helpful"}
-
-# Wishlist Routes
-@api_router.post("/wishlist/add/{product_id}")
-async def add_to_wishlist(product_id: str, current_user: User = Depends(get_current_user)):
-    # Check if product exists
-    product = await db.products.find_one({"id": product_id})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    
-    # Get or create wishlist
-    wishlist = await db.wishlists.find_one({"user_id": current_user.id})
-    if not wishlist:
-        wishlist = Wishlist(user_id=current_user.id, product_ids=[product_id])
-        await db.wishlists.insert_one(wishlist.dict())
-    else:
-        if product_id not in wishlist["product_ids"]:
-            await db.wishlists.update_one(
-                {"user_id": current_user.id},
-                {"$addToSet": {"product_ids": product_id}, "$set": {"updated_at": datetime.utcnow()}}
-            )
-    
-    return {"message": "Product added to wishlist"}
-
-@api_router.delete("/wishlist/remove/{product_id}")
-async def remove_from_wishlist(product_id: str, current_user: User = Depends(get_current_user)):
-    await db.wishlists.update_one(
-        {"user_id": current_user.id},
-        {"$pull": {"product_ids": product_id}, "$set": {"updated_at": datetime.utcnow()}}
-    )
-    return {"message": "Product removed from wishlist"}
-
-@api_router.get("/wishlist")
-async def get_wishlist(current_user: User = Depends(get_current_user)):
-    wishlist = await db.wishlists.find_one({"user_id": current_user.id})
-    if not wishlist:
-        return {"products": []}
-    
-    # Get product details
-    products = []
-    for product_id in wishlist["product_ids"]:
-        product = await db.products.find_one({"id": product_id})
-        if product:
-            products.append(Product(**product))
-    
-    return {"products": products}
-
-# Cart Routes
-@api_router.post("/cart/add")
-async def add_to_cart(
-    product_id: str,
-    quantity: int = 1,
-    variant_id: Optional[str] = None,
-    current_user: User = Depends(get_current_user)
-):
-    # Check if product exists
-    product = await db.products.find_one({"id": product_id})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    
-    # Get user's cart or create one
-    cart = await db.carts.find_one({"user_id": current_user.id})
-    if not cart:
-        cart = Cart(user_id=current_user.id, items=[])
-        await db.carts.insert_one(cart.dict())
-    
-    # Prepare cart item
-    cart_item = {
-        "product_id": product_id,
-        "quantity": quantity,
-        "variant_id": variant_id,
-        "price": get_user_price(Product(**product), current_user.user_type),
-        "added_at": datetime.utcnow()
-    }
-    
-    # Check if item already exists in cart
-    existing_item = None
-    for i, item in enumerate(cart.get("items", [])):
-        if item["product_id"] == product_id and item.get("variant_id") == variant_id:
-            existing_item = i
-            break
-    
-    if existing_item is not None:
-        # Update quantity
-        await db.carts.update_one(
-            {"user_id": current_user.id},
-            {"$inc": {f"items.{existing_item}.quantity": quantity}}
-        )
-    else:
-        # Add new item
-        await db.carts.update_one(
-            {"user_id": current_user.id},
-            {"$push": {"items": cart_item}, "$set": {"updated_at": datetime.utcnow()}}
-        )
-    
-    return {"message": "Product added to cart"}
-
-@api_router.get("/cart")
-async def get_cart(current_user: User = Depends(get_current_user)):
-    cart = await db.carts.find_one({"user_id": current_user.id})
-    if not cart:
-        return {"items": [], "total": 0}
-    
-    # Get product details for each item
-    cart_items = []
-    total = 0
-    
-    for item in cart.get("items", []):
-        product = await db.products.find_one({"id": item["product_id"]})
-        if product:
-            item_total = item["price"] * item["quantity"]
-            cart_items.append({
-                **item,
-                "product": Product(**product),
-                "item_total": item_total
-            })
-            total += item_total
-    
-    return {"items": cart_items, "total": total}
-
-@api_router.delete("/cart/remove/{product_id}")
-async def remove_from_cart(
-    product_id: str,
-    variant_id: Optional[str] = None,
-    current_user: User = Depends(get_current_user)
-):
-    # Remove item from cart
-    query = {"user_id": current_user.id}
-    update = {
-        "$pull": {
-            "items": {
-                "product_id": product_id,
-                "variant_id": variant_id if variant_id else {"$exists": False}
-            }
-        },
-        "$set": {"updated_at": datetime.utcnow()}
-    }
-    
-    await db.carts.update_one(query, update)
-    return {"message": "Product removed from cart"}
-
-@api_router.post("/cart/clear")
-async def clear_cart(current_user: User = Depends(get_current_user)):
-    await db.carts.update_one(
-        {"user_id": current_user.id},
-        {"$set": {"items": [], "updated_at": datetime.utcnow()}}
-    )
-    return {"message": "Cart cleared"}
-
-# Mount the API router to the main app
-app.include_router(api_router)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Root endpoint
-@app.get("/")
-async def root():
-    return {"message": "MarketPlace Pro API", "version": "2.0", "status": "active"}
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow()}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -1240,6 +641,16 @@ class LoyaltyTransaction(BaseModel):
     description: str
     order_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    is_verified_purchase: bool = False
+    helpful_count: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class ReviewCreate(BaseModel):
+    product_id: str
+    rating: int = Field(..., ge=1, le=5)
+    title: str
+    comment: str
+    images: Optional[List[str]] = []
 
 class Wishlist(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -1941,3 +1352,474 @@ async def create_product(product_data: ProductCreate, current_user: User = Depen
     await db.products.insert_one(product.dict())
     
     return {"message": "Product created successfully", "product_id": product.id}
+
+@api_router.get("/products")
+async def get_products(
+    # Basic Filters
+    category: Optional[str] = None,
+    subcategory: Optional[str] = None,
+    seller_id: Optional[str] = None,
+    brand: Optional[str] = None,
+    
+    # Price Filters
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    
+    # Rating and Review Filters
+    min_rating: Optional[float] = None,
+    min_reviews: Optional[int] = None,
+    
+    # Availability Filters
+    in_stock: Optional[bool] = None,
+    has_variants: Optional[bool] = None,
+    
+    # Feature Filters
+    is_featured: Optional[bool] = None,
+    is_trending: Optional[bool] = None,
+    custom_sizing: Optional[bool] = None,
+    
+    # Search Query
+    search: Optional[str] = None,
+    
+    # Advanced Filters
+    location: Optional[str] = None,
+    gst_available: Optional[bool] = None,
+    moq_max: Optional[int] = None,
+    
+    # Sorting Options
+    sort_by: Optional[str] = "created_at",  # created_at, price_low, price_high, rating, popularity, relevance
+    
+    # Pagination
+    limit: int = 20,
+    skip: int = 0
+):
+    query = {"is_active": True}
+    
+    # Basic filters
+    if category:
+        query["category"] = category
+    if subcategory:
+        query["subcategory"] = subcategory
+    if seller_id:
+        query["seller_id"] = seller_id
+    if brand:
+        query["brand"] = {"$regex": brand, "$options": "i"}
+    
+    # Price filters
+    if min_price is not None:
+        query["base_price"] = {"$gte": min_price}
+    if max_price is not None:
+        if "base_price" in query:
+            query["base_price"]["$lte"] = max_price
+        else:
+            query["base_price"] = {"$lte": max_price}
+    
+    # Rating and review filters
+    if min_rating is not None:
+        query["average_rating"] = {"$gte": min_rating}
+    if min_reviews is not None:
+        query["total_reviews"] = {"$gte": min_reviews}
+    
+    # Availability filters
+    if in_stock is not None:
+        if in_stock:
+            query["inventory_count"] = {"$gt": 0}
+        else:
+            query["inventory_count"] = {"$eq": 0}
+    
+    if has_variants is not None:
+        query["has_variants"] = has_variants
+    
+    # Feature filters
+    if is_featured is not None:
+        query["is_featured"] = is_featured
+    if is_trending is not None:
+        query["is_trending"] = is_trending
+    if custom_sizing is not None:
+        query["custom_sizing.enabled"] = custom_sizing
+    
+    # Advanced filters
+    if gst_available is not None:
+        if gst_available:
+            query["gst_percentage"] = {"$gt": 0}
+        else:
+            query["gst_percentage"] = {"$eq": 0}
+    
+    if moq_max is not None:
+        query["moq"] = {"$lte": moq_max}
+    
+    # Search functionality
+    if search:
+        search_regex = {"$regex": search, "$options": "i"}
+        query["$or"] = [
+            {"title": search_regex},
+            {"description": search_regex},
+            {"brand": search_regex},
+            {"category": search_regex},
+            {"seo_tags": {"$in": [search_regex]}},
+            {"meta_keywords": {"$in": [search_regex]}}
+        ]
+    
+    # Sorting
+    sort_options = {
+        "created_at": [("created_at", -1)],
+        "price_low": [("base_price", 1)],
+        "price_high": [("base_price", -1)],
+        "rating": [("average_rating", -1)],
+        "popularity": [("total_sold", -1)],
+        "relevance": [("view_count", -1), ("total_sold", -1)],
+        "trending": [("is_trending", -1), ("social_shares", -1)]
+    }
+    sort_criteria = sort_options.get(sort_by, [("created_at", -1)])
+    
+    products = await db.products.find(query).sort(sort_criteria).skip(skip).limit(limit).to_list(limit)
+    total_count = await db.products.count_documents(query)
+    
+    return {
+        "products": [Product(**product) for product in products],
+        "total_count": total_count,
+        "current_page": skip // limit + 1,
+        "total_pages": (total_count + limit - 1) // limit,
+        "has_next": skip + limit < total_count,
+        "has_previous": skip > 0
+    }
+
+@api_router.get("/products/search/suggestions")
+async def get_search_suggestions(q: str):
+    """Get search suggestions for autocomplete"""
+    if len(q) < 2:
+        return {"suggestions": []}
+    
+    search_regex = {"$regex": q, "$options": "i"}
+    
+    # Get suggestions from products
+    pipeline = [
+        {"$match": {"is_active": True, "title": search_regex}},
+        {"$group": {"_id": "$title", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 5}
+    ]
+    
+    title_suggestions = await db.products.aggregate(pipeline).to_list(5)
+    
+    # Get brand suggestions
+    brand_pipeline = [
+        {"$match": {"is_active": True, "brand": search_regex}},
+        {"$group": {"_id": "$brand", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 3}
+    ]
+    
+    brand_suggestions = await db.products.aggregate(brand_pipeline).to_list(3)
+    
+    # Get category suggestions
+    category_pipeline = [
+        {"$match": {"is_active": True, "category": search_regex}},
+        {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 3}
+    ]
+    
+    category_suggestions = await db.products.aggregate(category_pipeline).to_list(3)
+    
+    suggestions = []
+    
+    # Add title suggestions
+    for item in title_suggestions:
+        suggestions.append({
+            "text": item["_id"],
+            "type": "product",
+            "count": item["count"]
+        })
+    
+    # Add brand suggestions
+    for item in brand_suggestions:
+        suggestions.append({
+            "text": item["_id"],
+            "type": "brand",
+            "count": item["count"]
+        })
+    
+    # Add category suggestions
+    for item in category_suggestions:
+        suggestions.append({
+            "text": item["_id"],
+            "type": "category",
+            "count": item["count"]
+        })
+    
+    return {"suggestions": suggestions[:10]}
+
+@api_router.get("/products/{product_id}")
+async def get_product(product_id: str):
+    product = await db.products.find_one({"id": product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return Product(**product)
+
+@api_router.get("/products/categories/list")
+async def get_categories():
+    """Get all unique categories"""
+    categories = await db.products.distinct("category", {"is_active": True})
+    return {"categories": categories}
+
+@api_router.get("/products/brands/list")
+async def get_brands():
+    """Get all unique brands"""
+    brands = await db.products.distinct("brand", {"is_active": True, "brand": {"$ne": None}})
+    return {"brands": brands}
+
+# Review Routes
+@api_router.post("/reviews")
+async def create_review(review_data: ReviewCreate, current_user: User = Depends(get_current_user)):
+    # Check if user has purchased this product
+    order = await db.orders.find_one({
+        "customer_id": current_user.id,
+        "items.product_id": review_data.product_id,
+        "status": {"$in": ["delivered", "completed"]}
+    })
+    
+    review_dict = review_data.dict()
+    review_dict["user_id"] = current_user.id
+    review_dict["is_verified_purchase"] = bool(order)
+    if order:
+        review_dict["order_id"] = order["id"]
+    
+    review = Review(**review_dict)
+    await db.reviews.insert_one(review.dict())
+    
+    # Update product rating
+    await update_product_rating(review_data.product_id)
+    
+    return {"message": "Review created successfully", "review_id": review.id}
+
+@api_router.get("/reviews/product/{product_id}")
+async def get_product_reviews(
+    product_id: str,
+    rating_filter: Optional[int] = None,
+    verified_only: bool = False,
+    limit: int = 10,
+    skip: int = 0
+):
+    query = {"product_id": product_id}
+    
+    if rating_filter:
+        query["rating"] = rating_filter
+    if verified_only:
+        query["is_verified_purchase"] = True
+    
+    reviews = await db.reviews.find(query).sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
+    
+    # Get user info for each review
+    for review in reviews:
+        user = await db.users.find_one({"id": review["user_id"]})
+        if user:
+            review["user_name"] = user.get("contact_person") or user["email"].split("@")[0]
+        else:
+            review["user_name"] = "Anonymous"
+    
+    return reviews
+
+async def update_product_rating(product_id: str):
+    """Update product's average rating and review count"""
+    pipeline = [
+        {"$match": {"product_id": product_id}},
+        {"$group": {
+            "_id": None,
+            "average_rating": {"$avg": "$rating"},
+            "total_reviews": {"$sum": 1}
+        }}
+    ]
+    
+    result = await db.reviews.aggregate(pipeline).to_list(1)
+    if result:
+        await db.products.update_one(
+            {"id": product_id},
+            {"$set": {
+                "average_rating": round(result[0]["average_rating"], 2),
+                "total_reviews": result[0]["total_reviews"]
+            }}
+        )
+
+# Enhanced Review Routes
+@api_router.post("/reviews/{review_id}/helpful")
+async def mark_review_helpful(review_id: str, helpful: bool, current_user: User = Depends(get_current_user)):
+    """Mark a review as helpful or unhelpful"""
+    field = "helpful_count" if helpful else "unhelpful_count"
+    await db.reviews.update_one(
+        {"id": review_id},
+        {"$inc": {field: 1}}
+    )
+    return {"message": f"Review marked as {'helpful' if helpful else 'unhelpful'}"}
+
+@api_router.post("/reviews/{review_id}/seller-response")
+async def add_seller_response(review_id: str, response: str, current_user: User = Depends(get_current_user)):
+    """Add seller response to a review"""
+    # Verify user is seller of the product
+    review = await db.reviews.find_one({"id": review_id})
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    
+    product = await db.products.find_one({"id": review["product_id"]})
+    if not product or product["seller_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the seller can respond to reviews")
+    
+    await db.reviews.update_one(
+        {"id": review_id},
+        {
+            "$set": {
+                "seller_response": response,
+                "seller_response_date": datetime.utcnow()
+            }
+        }
+    )
+    return {"message": "Seller response added successfully"}
+
+@api_router.get("/reviews/analytics/{product_id}")
+async def get_review_analytics(product_id: str, current_user: User = Depends(get_current_user)):
+    """Get detailed review analytics for a product"""
+    # Verify user is seller of the product
+    product = await db.products.find_one({"id": product_id})
+    if not product or product["seller_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    pipeline = [
+        {"$match": {"product_id": product_id}},
+        {"$facet": {
+            "rating_distribution": [
+                {"$group": {"_id": "$rating", "count": {"$sum": 1}}},
+                {"$sort": {"_id": 1}}
+            ],
+            "sentiment_analysis": [
+                {"$group": {
+                    "_id": "$sentiment_label",
+                    "count": {"$sum": 1},
+                    "avg_sentiment": {"$avg": "$sentiment_score"}
+                }}
+            ],
+            "monthly_reviews": [
+                {"$group": {
+                    "_id": {
+                        "year": {"$year": "$created_at"},
+                        "month": {"$month": "$created_at"}
+                    },
+                    "count": {"$sum": 1},
+                    "avg_rating": {"$avg": "$rating"}
+                }},
+                {"$sort": {"_id.year": -1, "_id.month": -1}},
+                {"$limit": 12}
+            ]
+        }}
+    ]
+    
+    result = await db.reviews.aggregate(pipeline).to_list(1)
+    return result[0] if result else {}
+
+# Product Q&A Routes
+@api_router.post("/products/questions")
+async def create_question(question_data: ProductQuestionCreate, current_user: User = Depends(get_current_user)):
+    """Create a new product question"""
+    question_dict = question_data.dict()
+    question_dict["user_id"] = current_user.id
+    
+    question = ProductQuestion(**question_dict)
+    await db.product_questions.insert_one(question.dict())
+    
+    return {"message": "Question submitted successfully", "question_id": question.id}
+
+@api_router.get("/products/{product_id}/questions")
+async def get_product_questions(
+    product_id: str,
+    answered_only: bool = False,
+    limit: int = 10,
+    skip: int = 0
+):
+    """Get questions for a product"""
+    query = {"product_id": product_id}
+    
+    if answered_only:
+        query["answer"] = {"$ne": None}
+    
+    questions = await db.product_questions.find(query).sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
+    
+    # Get user info for each question
+    for question in questions:
+        user = await db.users.find_one({"id": question["user_id"]})
+        if user:
+            question["user_name"] = user.get("contact_person") or user["email"].split("@")[0]
+        else:
+            question["user_name"] = "Anonymous"
+        
+        # Get answerer info if available
+        if question.get("answered_by"):
+            answerer = await db.users.find_one({"id": question["answered_by"]})
+            if answerer:
+                question["answerer_name"] = answerer.get("contact_person") or answerer["email"].split("@")[0]
+    
+    return questions
+
+@api_router.post("/questions/{question_id}/answer")
+async def answer_question(question_id: str, answer_data: AnswerCreate, current_user: User = Depends(get_current_user)):
+    """Answer a product question"""
+    question = await db.product_questions.find_one({"id": question_id})
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    # Check if user is seller of the product
+    product = await db.products.find_one({"id": question["product_id"]})
+    is_seller = product and product["seller_id"] == current_user.id
+    
+    await db.product_questions.update_one(
+        {"id": question_id},
+        {
+            "$set": {
+                "answer": answer_data.answer,
+                "answered_by": current_user.id,
+                "answered_at": datetime.utcnow(),
+                "is_seller_answer": is_seller
+            }
+        }
+    )
+    
+    return {"message": "Answer submitted successfully"}
+
+@api_router.post("/questions/{question_id}/helpful")
+async def mark_question_helpful(question_id: str, current_user: User = Depends(get_current_user)):
+    """Mark a question as helpful"""
+    await db.product_questions.update_one(
+        {"id": question_id},
+        {"$inc": {"helpful_count": 1}}
+    )
+    return {"message": "Question marked as helpful"}
+
+# Wishlist Routes
+@api_router.post("/wishlist/add/{product_id}")
+async def add_to_wishlist(product_id: str, current_user: User = Depends(get_current_user)):
+    # Check if product exists
+    product = await db.products.find_one({"id": product_id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Get or create wishlist
+    wishlist = await db.wishlists.find_one({"user_id": current_user.id})
+    if not wishlist:
+        wishlist = Wishlist(user_id=current_user.id, product_ids=[product_id])
+        await db.wishlists.insert_one(wishlist.dict())
+    else:
+        if product_id not in wishlist["product_ids"]:
+            await db.wishlists.update_one(
+                {"user_id": current_user.id},
+                {"$addToSet": {"product_ids": product_id}, "$set": {"updated_at": datetime.utcnow()}}
+            )
+    
+    return {"message": "Product added to wishlist"}
+
+@api_router.delete("/wishlist/remove/{product_id}")
+async def remove_from_wishlist(product_id: str, current_user: User = Depends(get_current_user)):
+    await db.wishlists.update_one(
+        {"user_id": current_user.id},
+        {"$pull": {"product_ids": product_id}, "$set": {"updated_at": datetime.utcnow()}}
+    )
+    return {"message": "Product removed from wish<response clipped><NOTE>To save on context only part of this file has been shown to you. You should retry this tool after you have searched inside the file with `grep -n` in order to find the line numbers of what you are looking for.</NOTE>
+
+
