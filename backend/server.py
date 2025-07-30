@@ -1820,6 +1820,6 @@ async def remove_from_wishlist(product_id: str, current_user: User = Depends(get
         {"user_id": current_user.id},
         {"$pull": {"product_ids": product_id}, "$set": {"updated_at": datetime.utcnow()}}
     )
-    return {"message": "Product removed from wish<response clipped><NOTE>To save on context only part of this file has been shown to you. You should retry this tool after you have searched inside the file with `grep -n` in order to find the line numbers of what you are looking for.</NOTE>
+    return {"message": "Product removed from wish"<response clipped><NOTE>To save on context only part of this file has been shown to you. You should retry this tool after you have searched inside the file with `grep -n` in order to find the line numbers of what you are looking for.</NOTE>
 
 
