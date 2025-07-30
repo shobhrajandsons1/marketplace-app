@@ -14,9 +14,9 @@
   },
   "scripts": {
     "start": "serve -s build -l $PORT",
-    "dev": "craco start",
-    "build": "craco build",
-    "test": "craco test",
+    "dev": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
   "browserslist": {
@@ -36,7 +36,6 @@
     "npm": ">=6.0.0"
   },
   "devDependencies": {
-    "@craco/craco": "^7.1.0",
     "@eslint/js": "9.23.0",
     "autoprefixer": "^10.4.20",
     "eslint": "9.23.0",
