@@ -1,0 +1,31 @@
+services:
+  # Backend Service
+  - type: web
+    name: marketplace-backend
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONGO_URL
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+
+  # Frontend Service  
+  - type: web
+    name: marketplace-frontend
+    env: node
+    buildCommand: cd frontend && yarn install && yarn build
+    startCommand: cd frontend && yarn start
+    envVars:
+      - key: REACT_APP_BACKEND_URL
+        fromService:
+          type: web
+          name: marketplace-backend
+          property: url
+
+databases:
+  # MongoDB will be handled by Atlas (free tier)
+  # No database configuration needed here
