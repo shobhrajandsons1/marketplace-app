@@ -47,10 +47,59 @@ db = client[db_name]
 # -----------------------------------------------------------------------------
 # App + Router
 # -----------------------------------------------------------------------------
-app = FastAPI()
+app = FastAPI(
+    title="Marketplace API",
+    description="A comprehensive marketplace API with user registration, product management, and more",
+    version="1.0.0"
+)
 api_router = APIRouter(prefix="/api")
 
 security = HTTPBearer()
+
+# -----------------------------------------------------------------------------
+# CORS Configuration - MUST BE ADDED BEFORE ROUTES
+# -----------------------------------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],    # In production, replace with your domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -----------------------------------------------------------------------------
+# ROOT ROUTE - This fixes the 404 error!
+# -----------------------------------------------------------------------------
+@app.get("/")
+async def root():
+    """Root endpoint to confirm the API is running"""
+    return {
+        "message": "🚀 Marketplace API is running successfully!",
+        "status": "healthy",
+        "version": "1.0.0",
+        "endpoints": {
+            "api_docs": "/docs",
+            "api_base": "/api",
+            "health": "/health"
+        },
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    try:
+        # Test database connection
+        await client.admin.command('ping')
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    return {
+        "status": "healthy",
+        "database": db_status,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 # -----------------------------------------------------------------------------
 # Enums & Pydantic Models
@@ -83,51 +132,51 @@ class VerificationStatus(str, Enum):
     VERIFIED = "verified"
     REJECTED = "rejected"
 
-# … (ALL OTHER MODELS FROM Emergent’s FILE GO HERE) …
-# You pasted BuyerRegistration, PartnerRegistration, ProductMedia, ProductVariant,
-# DimensionConfig, SizeConfiguration, BulkPricing, SEOData, MultiSellerListing,
-# Review, ProductQuestion, AnalyticsEvent, LoyaltyProgram, Order, Coupon,
-# AIContentRequest, AIImageRequest, AISettings, PaymentSettings, NotificationSettings,
-# AnalyticsSettings, ShippingSettings, MarketingSettings, SystemSettings,
-# CommissionSettings, Wishlist, Cart, etc., and all helper functions:
-# hash_password(), verify_password(), create_jwt_token(), verify_jwt_token(),
-# get_current_user(), get_optional_user(), get_current_admin_user(), calculate_pricing_tiers(),
-# get_user_price(), mock_ai_content_generation(), mock_ai_image_generation(),
-# send_verification_email(), notify_admin_for_partner_verification(),
-# update_product_rating(), and so on…
+# -----------------------------------------------------------------------------
+# ADD ALL YOUR OTHER PYDANTIC MODELS HERE
+# -----------------------------------------------------------------------------
+# (BuyerRegistration, PartnerRegistration, ProductMedia, ProductVariant, etc.)
+# Copy all your existing models from your original file
 
 # -----------------------------------------------------------------------------
-# All Your @api_router.post / @api_router.get Definitions
+# ADD ALL YOUR HELPER FUNCTIONS HERE
 # -----------------------------------------------------------------------------
-# (Buyer & Partner registration, login, email verification, GST verify,
-#  admin partner verify, ERP connect/sync, product CRUD & search,
-#  review & Q&A routes, wishlist/cart routes, etc.)
-#
-# … THIS ENTIRE SECTION IS YOUR Emergent CODE, UNTOUCHED …
-# -----------------------------------------------------------------------------
+# (hash_password, verify_password, create_jwt_token, etc.)
+# Copy all your existing helper functions from your original file
 
 # -----------------------------------------------------------------------------
-# ─── ADD THESE TWO BLOCKS AT THE VERY END ─────────────────────────────────────
+# ADD ALL YOUR API ROUTES HERE
 # -----------------------------------------------------------------------------
-# 1) Enable CORS so your front-end can talk to /api from any origin
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],    # tighten in production to your domain(s)
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Copy all your @api_router.post and @api_router.get routes from your original file
+# For example:
+# @api_router.post("/register/buyer")
+# @api_router.post("/register/partner")
+# @api_router.post("/login")
+# etc.
 
-# 2) Mount your router under /api
+# -----------------------------------------------------------------------------
+# Mount the API router
+# -----------------------------------------------------------------------------
 app.include_router(api_router)
 
 # -----------------------------------------------------------------------------
-# Optional: run with “python main.py”
+# Error handling
+# -----------------------------------------------------------------------------
+@app.exception_handler(404)
+async def not_found_handler(request, exc):
+    return {
+        "error": "Endpoint not found",
+        "message": f"The requested endpoint does not exist. Try visiting /docs for API documentation.",
+        "available_endpoints": ["/", "/health", "/docs", "/api"]
+    }
+
+# -----------------------------------------------------------------------------
+# For development - run with "python server.py"
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "server:app",  # Fixed: should be "server:app" not "main:app"
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8000)),
         reload=True
