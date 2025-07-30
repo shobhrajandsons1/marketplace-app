@@ -1823,3 +1823,7 @@ async def remove_from_wishlist(product_id: str, current_user: User = Depends(get
     if result.modified_count == 0:
         return {"message": "Product was not in wishlist or wishlist does not exist"}
     return {"message": "Product removed from wishlist"}
+
+@app.get("/")
+def root():
+    return {"message": "Marketplace backend is running. See /api for available endpoints."}
